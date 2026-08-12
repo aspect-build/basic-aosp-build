@@ -1,0 +1,150 @@
+# Runs on a self-hosted Aspect Workflows runner because the build needs the ephemeral
+# scratch disk at /mnt/ephemeral and the bb_clientd gRPC socket that rbe.sh points
+# RBE_service at. A hosted GitHub runner has neither. Steps that would otherwise need
+# root degrade to a no-op when the runner image already provides what they set up, so
+# passwordless sudo is only required on a runner missing m4 or /mnt/ephemeral.
+name: AOSP Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: AOSP branch to build (build-aosp.sh -b)
+        type: string
+        default: ""
+      target:
+        description: Lunch target (build-aosp.sh -t)
+        type: string
+        default: ""
+      clean:
+        description: Wipe the build directory before building (build-aosp.sh -c)
+        type: boolean
+        default: false
+      rbe:
+        description: Use Remote Build Execution (build-aosp.sh -r)
+        type: boolean
+        default: false
+      no_cache:
+        description: >-
+          Cold-cache benchmark: refuse cached RBE results, disable ccache, and drop out/ so
+          every action runs on a worker. Keeps the synced source tree.
+        type: boolean
+        default: false
+
+concurrency:
+  # The build directory on the runner is shared state; never build it twice at once.
+  group: aosp-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build AOSP
+    runs-on: [self-hosted, aspect-workflows, aspect-aosp-demo]
+    timeout-minutes: 600
+    env:
+      BUILD_DIR: /tmp/aosp_workspace
+
+    steps:
+      - name: Show OS release
+        run: cat /etc/issue
+
+      - uses: actions/checkout@v6
+
+      - name: Configure git
+        run: |
+          git config --global user.name "Demo Aspect Bot"
+          git config --global user.email "demo@aspect-build"
+          git config --global color.ui false
+
+      - name: Prepare build directory
+        run: |
+          if [[ -d "$BUILD_DIR" ]]; then
+            echo "Reusing existing build directory $BUILD_DIR"
+            if [[ -d "$BUILD_DIR/.repo" ]]; then
+              echo "  .repo present: repo sync will update in place"
+            else
+              echo "  no .repo: repo will initialize from scratch"
+            fi
+            size=$(du -sh "$BUILD_DIR" 2>/dev/null | cut -f1)
+            echo "  size: ${size:-unknown}"
+            df -h "$BUILD_DIR"
+            echo "Reused build directory \`$BUILD_DIR\` (${size:-unknown} on disk)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Creating build directory $BUILD_DIR"
+            mkdir -p "$BUILD_DIR"
+            chmod 777 "$BUILD_DIR"
+            df -h "$BUILD_DIR"
+            echo "Created build directory \`$BUILD_DIR\` (clean build)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Drops build outputs but not .repo -- a cold *cache* test still wants the source
+      # tree, and re-syncing AOSP costs ~35 minutes. --clean is the wrong tool here: it
+      # removes the whole directory, .repo included.
+      #
+      # $HOME/.cache/reclient/cache is deliberately left alone. reproxy keeps reproxy.creds
+      # there alongside its deps cache, and AOSP forces
+      # use_application_default_credentials=true regardless of what rbe.sh exports -- so on
+      # a runner with no GCP ADC, deleting that directory leaves reproxy unable to acquire
+      # credentials and every RPC parks until its deadline. The deps cache only memoises
+      # input digests anyway; it cannot produce an RBE cache hit, so it does not skew a
+      # cold-cache measurement.
+      - name: Drop local caches and build outputs
+        if: inputs.no_cache
+        run: |
+          rm -rf "$BUILD_DIR/out"
+          ccache -C 2>/dev/null || rm -rf "$HOME/.ccache"
+          echo "Cold-cache run: dropped out/ and ccache" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build AOSP
+        run: |
+          args=(--build-dir "$BUILD_DIR")
+          # INPUT_RBE is empty on push/pull_request; RBE is on unless explicitly disabled.
+          if [[ "$INPUT_RBE" != "false" ]]; then args+=(--rbe); fi
+          if [[ -n "$INPUT_BRANCH" ]]; then args+=(--branch "$INPUT_BRANCH"); fi
+          if [[ -n "$INPUT_TARGET" ]]; then args+=(--target "$INPUT_TARGET"); fi
+          if [[ "$INPUT_CLEAN" == "true" ]]; then args+=(--clean); fi
+          ./build-aosp.sh "${args[@]}"
+        env:
+          INPUT_BRANCH: ${{ inputs.branch }}
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_CLEAN: ${{ inputs.clean }}
+          INPUT_RBE: ${{ inputs.rbe }}
+          # Read by rbe.sh and build-aosp.sh, which default them when unset.
+          # rewrapper's flag is `remote_accept_cache` -- no trailing "d". The misspelling
+          # is not a flag and is ignored in silence, which made an earlier cold-cache run
+          # take 99.98% cache hits and report an 8-minute "from scratch" build.
+          RBE_remote_accept_cache: ${{ inputs.no_cache && 'false' || 'true' }}
+          # Pinned, never toggled. soong fingerprints its environment and invalidates
+          # analysis when any variable changes value, so flipping this between runs
+          # regenerates all 1024 glob shards and replans the graph -- which is a soong
+          # invalidation being measured, not a cache comparison. Off because RBE compiles
+          # remotely: ccache would only add local disk churn.
+          USE_CCACHE: "0"
+
+      # build-aosp.sh leaves its logs on disk and does no uploading of its own, so gather
+      # them here. log() appends to ./aosp-build.log relative to whatever directory the
+      # script had cd'd into, so the log lands in more than one place.
+      - name: Collect logs and artifacts
+        if: always()
+        run: |
+          out="${{ runner.temp }}/aosp-artifacts"
+          mkdir -p "$out"
+          for f in ./aosp-build.log "$(dirname "$BUILD_DIR")/aosp-build.log" "$BUILD_DIR/aosp-build.log"; do
+            if [[ -f "$f" ]]; then cp "$f" "$out/$(echo "$f" | tr '/' '_')"; fi
+          done
+          if [[ -d "$BUILD_DIR/out/soong/.temp/rbe" ]]; then
+            tar -czf "$out/rbe_logs.tar.gz" -C "$BUILD_DIR" out/soong/.temp/rbe || echo "Failed to create RBE logs archive"
+          fi
+          ls -la "$out"
+
+      - name: Upload logs and artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aosp-build-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aosp-artifacts
+          if-no-files-found: warn
+          retention-days: 14
