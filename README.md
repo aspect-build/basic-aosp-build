@@ -3,8 +3,9 @@
 Builds the Android Open Source Project from source, locally or with remote execution
 against an [Aspect Workflows](https://aspect.build) deployment. AOSP's build system speaks
 RBE through [reclient](https://github.com/bazelbuild/reclient); this repo wires that at
-scale: a full `android-14.0.0_r22` build executes 81k+ actions on a Buildbarn-backed
-worker fleet.
+scale: a full build executes 81k+ actions on a Buildbarn-backed worker fleet.
+
+The default build is Android Automotive (AAOS) for arm64, from `android-17.0.0_r1`.
 
 Every CI run of the
 [AOSP Build workflow](https://github.com/aspect-build/basic-aosp-build/actions/workflows/aosp-build.yaml)
@@ -12,8 +13,9 @@ is public and uploads its complete build logs as artifacts.
 
 ## Measured results
 
-Four benchmarks of the same build (`android-14.0.0_r22`, `aosp_arm64-userdebug`,
-176,702 ninja actions), spanning worst case to steady state:
+Four benchmarks of the same build, spanning worst case to steady state. These were
+measured on `android-14.0.0_r22` / `aosp_arm64-userdebug` (176,702 ninja actions), which
+was the default at the time. The automotive target above has not been benchmarked yet:
 
 | Benchmark | Build time | Run |
 |---|---|---|
@@ -38,15 +40,18 @@ ratio is smaller because AOSP ends in a serial packaging tail no platform can pa
 ## Local usage
 
 ```bash
-./build-aosp.sh                          # android-14.0.0_r22, aosp_arm64-userdebug
-./build-aosp.sh -b android-14.0.0_r1     # another branch
-./build-aosp.sh -t aosp_x86_64-userdebug # another target
-./build-aosp.sh -r                       # with remote execution (see rbe.sh)
-./build-aosp.sh -j 2                     # fewer repo-sync jobs if AOSP's servers 429 you
-./build-aosp.sh -d /mnt/fast/aosp        # build directory on fast local disk
-./build-aosp.sh -c                       # clean: removes the build directory first
-./build-aosp.sh -l                       # list available lunch targets
+./build-aosp.sh                                                 # AAOS arm64, android-17.0.0_r1
+./build-aosp.sh -b android-16.0.0_r4                            # another branch
+./build-aosp.sh -t aosp_cf_x86_64_auto-trunk_staging-userdebug  # another target
+./build-aosp.sh -r                                              # with remote execution (see rbe.sh)
+./build-aosp.sh -j 2                                            # fewer repo-sync jobs if AOSP's servers 429 you
+./build-aosp.sh -d /mnt/fast/aosp                               # build directory on fast local disk
+./build-aosp.sh -c                                              # clean: removes the build directory first
+./build-aosp.sh -l                                              # list available lunch targets
 ```
+
+Lunch targets take the three-part `<product>-<release>-<variant>` form on trunk-stable
+branches; the two-part `aosp_arm64-userdebug` spelling is rejected outright on 17.
 
 Requirements are AOSP's usual ones: Linux, plenty of cores, and disk. Budget ~200 GB for
 the synced tree plus ~250 GB for `out/` on a full build, on local NVMe if at all possible.
