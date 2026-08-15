@@ -89,8 +89,12 @@ mkdir -p $RBE_cache_dir
 # passes `--platform` on every rewrapper command line -- image digest hardcoded there,
 # plus `Pool=$RBE_CXX_POOL` (or `$RBE_JAVA_POOL` for the java tools) -- and an explicit
 # flag beats the environment. So the digest below is not a setting; it is a copy of the
-# one in that branch's rbe.mk, and it moves when the AOSP branch moves.
-export RBE_platform="container-image=docker://gcr.io/androidbuild-re-dockerimage/android-build-remoteexec-image@sha256:582efb38f0c229ea39952fff9e132ccbe183e14869b39888010dacf56b360d62"
+# one in that branch's rbe.mk, and it moves when the AOSP branch moves. This one is
+# android-17.0.0_r1's; re-derive it after any branch change with
+#   grep -o 'docker://[^,"]*' build/make/core/rbe.mk
+# and give the executor pool the same value, because Buildbarn matches the property set
+# exactly and a stale digest means nothing schedules at all.
+export RBE_platform="container-image=docker://gcr.io/androidbuild-re-dockerimage/android-build-remoteexec-image@sha256:1eb7f64b9e17102b970bd7a1af7daaebdb01c3fb777715899ef462d6c6d01a45"
 export RBE_v=4
 export RBE_alsologtostderr=true 
 export RBE_service_no_security=true 

@@ -2,13 +2,20 @@
 
 # AOSP Build Script
 # This script fetches the AOSP manifest and builds Android Open Source Project
+#
+# The defaults build Android Automotive (AAOS) for arm64 from the android-17.0.0_r1 tag.
+# Since trunk-stable, lunch takes a three-part <product>-<release>-<variant> combo and
+# rejects the old two-part form outright, so any -t value needs the release config in the
+# middle. Moving to another branch also moves the RBE toolchain image digest pinned in
+# build/make/core/rbe.mk, which the executor fleet has to advertise; see rbe.sh and the
+# README before pointing this at a different tag.
 
 set -e  # Exit on any error
 
 # Configuration
 AOSP_MANIFEST_URL="https://android.googlesource.com/platform/manifest"
-DEFAULT_BRANCH="android-14.0.0_r22"
-DEFAULT_TARGET="aosp_arm64-userdebug"  # Will be validated and corrected if needed
+DEFAULT_BRANCH="android-17.0.0_r1"
+DEFAULT_TARGET="aosp_cf_arm64_auto-trunk_staging-userdebug"  # Validated and corrected if needed
 BUILD_DIR="aosp"
 LOG_FILE="aosp-build.log"
 DEFAULT_SYNC_JOBS=4  # Conservative default to avoid 429 errors
@@ -271,7 +278,7 @@ setup_build() {
         lunch 2>&1 | head -20 | tee -a "../$LOG_FILE"
         
         # Try some common fallback targets
-        local fallback_targets=("aosp_arm64-userdebug" "aosp_arm64-user" "aosp_x86_64-userdebug" "aosp_x86_64-user")
+        local fallback_targets=("aosp_cf_x86_64_auto-trunk_staging-userdebug" "aosp_arm64-trunk_staging-userdebug" "aosp_x86_64-trunk_staging-userdebug")
         local found_target=""
         
         for fallback in "${fallback_targets[@]}"; do
@@ -332,14 +339,14 @@ show_usage() {
     echo "  -h, --help              Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0                                    # Build with default settings"
-    echo "  $0 -b android-14.0.0_r1              # Build specific branch"
-    echo "  $0 -t aosp_x86_64-userdebug          # Build for x86_64"
-    echo "  $0 -j 2                              # Use only 2 parallel jobs (if getting 429 errors)"
-    echo "  $0 -r                                 # Use RBE for distributed builds"
-    echo "  $0 -d /path/to/custom/build           # Use custom build directory"
-    echo "  $0 -l                                 # List available lunch targets"
-    echo "  $0 -c -b master -t aosp_arm64-user   # Clean build (removes existing directory)"
+    echo "  $0                                                  # Build with default settings"
+    echo "  $0 -b android-16.0.0_r4                             # Build specific branch"
+    echo "  $0 -t aosp_cf_x86_64_auto-trunk_staging-userdebug   # Build automotive for x86_64"
+    echo "  $0 -j 2                                             # Use only 2 parallel jobs (if getting 429 errors)"
+    echo "  $0 -r                                               # Use RBE for distributed builds"
+    echo "  $0 -d /path/to/custom/build                         # Use custom build directory"
+    echo "  $0 -l                                               # List available lunch targets"
+    echo "  $0 -c -t aosp_arm64-trunk_staging-userdebug         # Clean build (removes existing directory)"
     echo ""
     echo "Rate Limiting Tips:"
     echo "  - If you get 429 (Too Many Requests) errors, reduce jobs with -j 1 or -j 2"
@@ -365,12 +372,13 @@ show_usage() {
     echo "  - Collecting and uploading those is the CI job's responsibility"
     echo "    (see .github/workflows/aosp-build.yaml)"
     echo ""
-    echo "Common build targets (format may vary by AOSP version):"
-    echo "  aosp_arm64-userdebug    # ARM64 userdebug build"
-    echo "  aosp_x86_64-userdebug   # x86_64 userdebug build"
-    echo "  aosp_arm64-user         # ARM64 user build"
-    echo "  aosp_x86_64-user        # x86_64 user build"
-    echo "  Note: Use -l to list actual available targets for your AOSP version"
+    echo "Common build targets:"
+    echo "  aosp_cf_arm64_auto-trunk_staging-userdebug    # Automotive (AAOS), arm64 -- the default"
+    echo "  aosp_cf_x86_64_auto-trunk_staging-userdebug   # Automotive (AAOS), x86_64"
+    echo "  aosp_arm64-trunk_staging-userdebug            # Generic phone, arm64"
+    echo "  aosp_x86_64-trunk_staging-userdebug           # Generic phone, x86_64"
+    echo "  Note: since trunk-stable, lunch requires <product>-<release>-<variant> and"
+    echo "        rejects the two-part form. Use -l to list targets for your AOSP version."
 }
 
 # Main function
